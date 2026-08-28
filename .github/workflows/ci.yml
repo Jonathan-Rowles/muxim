@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        neovim: [v0.12.0, v0.12.5]
+        experimental: [false]
+        include:
+          - os: ubuntu-latest
+            neovim: nightly
+            experimental: true
+          - os: macos-latest
+            neovim: nightly
+            experimental: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim }}
+      - name: Fetch telescope for the picker specs
+        run: |
+          mkdir -p "$HOME/plugins"
+          git clone --depth 1 https://github.com/nvim-telescope/telescope.nvim "$HOME/plugins/telescope.nvim"
+          git clone --depth 1 https://github.com/nvim-lua/plenary.nvim "$HOME/plugins/plenary.nvim"
+      - name: Run the suite
+        run: MUXIM_PLUGIN_DIR="$HOME/plugins" tests/run

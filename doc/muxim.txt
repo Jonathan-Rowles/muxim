@@ -1,0 +1,971 @@
+*muxim.txt*  Sessions that outlive the terminal, and the agents in them
+
+Author: Jonathan Rowles
+License: MIT
+
+==============================================================================
+CONTENTS                                                           *muxim*
+
+  Requirements ................ |muxim-requirements|
+  The model ................... |muxim-model|
+  Sockets ..................... |muxim-sockets|
+  Detaching and quitting ...... |muxim-detach|
+  Quickstart .................. |muxim-quickstart|
+  Setup ....................... |muxim-setup|
+  Options ..................... |muxim-options|
+  Keys ........................ |muxim-keys|
+  Commands .................... |muxim-commands|
+  Pickers ..................... |muxim-pickers|
+  Agents ...................... |muxim-agents|
+  Tabline ..................... |muxim-tabline|
+  Highlights .................. |muxim-highlights|
+  Terminals ................... |muxim-terminals|
+  API ......................... |muxim-api|
+  Events ...................... |muxim-events|
+  Troubleshooting ............. |muxim-troubleshooting|
+  FAQ ......................... |muxim-faq|
+
+==============================================================================
+REQUIREMENTS                                          *muxim-requirements*
+
+- Neovim 0.12 or newer. Attaching a UI to a running session uses |:connect|,
+  which does not exist before 0.12.
+- A Unix-like OS. Sessions are addressed by Unix domain sockets.
+
+==============================================================================
+THE MODEL                                                    *muxim-model*
+
+A SESSION is a headless `nvim --listen` process, one per project directory,
+named after that directory. Your visible Neovim is a CLIENT attached to one
+session. Closing the terminal emulator kills the client; the session, its
+buffers, jobs, and language servers keep running.
+
+Inside a session, tmux windows are |tabpages| and tmux panes are |windows|.
+Each tab can own a terminal buffer; `<prefix>c` opens a new tab with one.
+
+Every session that opens code starts its own language servers. Five Rust
+sessions is five rust-analyzers. Budget accordingly.
+
+Coding agents running in a session's terminals report their state through
+their own hooks, so muxim can say which one is waiting on you without reading
+a byte of terminal output. See |muxim-agents|.
+
+==============================================================================
+SOCKETS                                                    *muxim-sockets*
+
+Sockets live in a private directory: `$XDG_RUNTIME_DIR/muxim`, mode 0700,
+falling back to `/tmp/muxim-<uid>` when that variable is unset, which is the
+normal case on macOS. Never `stdpath('run')`: with no `$XDG_RUNTIME_DIR` that
+is a per-process directory, so every session would get its own and see no
+other. Socket names embed a digest of the project path first, so `sun_path`
+truncation (108 bytes on Linux, 104 on macOS, silent in libuv) cannot make
+two projects collide.
+
+A session that dies uncleanly leaves a stale socket file. Listing NEVER
+deletes, because a session that is merely mid-exit stops answering while it is
+still alive; |:MuximClean| prunes on demand.
+Sockets OUTSIDE that directory are nobody's to prune, so `:checkhealth muxim`
+reports the dead ones it can see and leaves them to you.
+
+`$MUXIM_SERVER` is set to this instance's socket so child processes can
+find their session.
+
+==============================================================================
+DETACHING AND QUITTING                                      *muxim-detach*
+
+Detaching does NOT save. `<prefix>d` runs |:detach|: the UI exits and every
+modified buffer stays modified inside a process with no UI.
+
+Killing a session from the picker sends `qall`, which REFUSES when buffers
+are modified; the message lists them. Force-kill first asks the session what
+is unsaved and shows you the list before discarding it.
+
+Closing the last pane of the last window asks Quit / Detach / Cancel, with
+Cancel the default. Quit runs `confirm qall`, so unsaved buffers are still
+your decision; Detach leaves the session running and names the key that gets
+you back (configurable via `on_last_close`, see |muxim-options|).
+
+==============================================================================
+QUICKSTART                                              *muxim-quickstart*
+
+Installing the plugin is enough: if nothing has called `setup()` by
+|VimEnter|, the plugin calls it with defaults. Call it yourself to
+configure: >lua
+
+  require('muxim').setup()
+<
+The one option most people change: >lua
+
+  require('muxim').setup({ prefix = '<C-a>' })
+<
+Then: `<prefix>c` for a new window, `<prefix>s` to move between sessions,
+`<prefix>?` for the cheatsheet, `:checkhealth muxim` when in doubt.
+
+==============================================================================
+SETUP                                                        *muxim-setup*
+
+setup({opts})                                              *muxim.setup()*
+    Claims (or adopts) a server socket for this instance, binds the prefix
+    keys, installs the tabline, and registers the terminal lifecycle
+    autocmds and user commands. Returns `true` on success, `false` when
+    bailing: Neovim too old, no socket claimable, or this instance is
+    NESTED (running inside another session's terminal, `$NVIM` set) and
+    `opts.nested` was not given. A nested instance still gets terminal
+    autocmds, events, and commands; it does not claim a socket or bind keys.
+    At |VimEnter| a nested instance started as a plain `nvim [file ...]` in
+    a real terminal hands its files and directories to the owning session
+    and exits, so a shell rc that rebuilds `PATH` over muxim's wrapper
+    cannot bring back a nested editor. Anything that means "a real editor
+    here" stays nested: any flag beyond `-u`/`-i`, `+` commands, stdin
+    content, version-control message files, a GUI or `--headless` start.
+
+    Calling it is optional: at |VimEnter| the plugin runs `setup()` with
+    defaults unless something already called it (and stays silent on Neovim
+    older than 0.12). Set `g:loaded_muxim` to disable the plugin file
+    entirely. Calling `setup()` again reapplies it: prefix keys are rebound
+    rather than stacked, and `keys = false` or `tabline = false` remove what
+    an earlier call installed. `prefix`, `keys` and `tabline` are applied
+    from the call alone, so a call that omits them reverts those three to
+    their defaults; the other options keep their values from the earlier
+    call.
+
+==============================================================================
+OPTIONS                                                    *muxim-options*
+
+Defaults shown. >lua
+
+  require('muxim').setup({
+    prefix = '<C-b>',
+    keys = {},
+    tabline = {},
+    picker = nil,
+    projects = {},
+    nested = false,
+    on_last_close = nil,
+    remain_on_exit = false,
+    adopt_foreign_terminals = false,
+    keep_busy_terminals = true,
+    follow_terminal_cwd = false,
+    enter_insert = false,
+    on_terminal_hide = nil,
+    agents = {},
+  })
+<
+prefix                  The tmux prefix key. See |muxim-keys-prefix|.
+
+keys                    Table merged over the defaults (see
+                        |muxim-keys-custom|), or `false` to bind nothing.
+
+tabline                 Options for |muxim-tabline|, or `false` to leave
+                        'tabline' alone.
+
+picker                  `'telescope'`, `'select'`, or a backend table (see
+                        |muxim-picker-api|). Default auto-detects
+                        telescope and falls back to |vim.ui.select()|.
+
+projects                Directories the session picker offers even when no
+                        session is running in them, as a list or a function
+                        returning one. Choosing one spawns its session.
+
+agents                  Options for |muxim-agents|, or `false` to watch
+                        nothing and inject no hooks. Keys: `notify`,
+                        `commands`, `marks`, `drawer`. The default is
+                        `{ notify = 'unfocused' }`: a blocked agent notifies
+                        unless nvim has focus AND you are already looking at
+                        its terminal. `true` always notifies, `false` never
+                        does, and a function receives the entry instead. A
+                        session with no UI is never notified, whatever this
+                        says, and nothing notifies twice for one wait.
+
+nested                  Allow full setup inside another session's terminal.
+                        Without it a nested instance sets
+                        `vim.g.muxim_nested` and stays passive.
+
+on_last_close           Function called when closing the last pane of the
+                        last window. The default offers Quit / Detach /
+                        Cancel. Replace it to build a hub: see |muxim-faq|.
+
+remain_on_exit          When `true`, windows showing an exited terminal stay
+                        open (tmux `remain-on-exit`). Default closes them.
+
+adopt_foreign_terminals When `true`, any |:terminal| buffer is managed
+                        (owned by its tab, reaped with it). Default `false`:
+                        only terminals this plugin opens are managed, and
+                        toggleterm/lazygit/etc are left alone unless you opt
+                        in.
+
+follow_terminal_cwd     When `true`, a tab's root follows the focused
+                        terminal's directory automatically (needs the shell to
+                        emit OSC 7, see |muxim-tab-roots|). Default `false`:
+                        promote it deliberately with |:MuximTabRoot|.
+
+keep_busy_terminals     When `true` (default), reaping spares a hidden
+                        orphaned terminal whose job has a running foreground
+                        child. Set `false` for tmux behaviour: closing the
+                        owner kills the pane, busy or not.
+
+enter_insert            When `true`, entering a MANAGED terminal window puts
+                        you in terminal mode, so you can type without
+                        pressing `i` first (terminals excluded by
+                        `adopt_foreign_terminals` are left alone).
+                        |muxim.terminal.toggle()| enters terminal mode
+                        whichever way this is set: asking for the terminal is
+                        asking to type in it.
+
+                        Copy mode is exempt, and the test is whether the
+                        terminal is SCROLLED BACK, not whether you left
+                        insert. A terminal parked at its prompt is put back
+                        into terminal mode however you left it (|muxim-keys|
+                        `[`, `<C-\><C-n>`, or your own escape mapping); one
+                        scrolled up into its output is left exactly where you
+                        were reading, and resumes on its own once you scroll
+                        to the bottom. Nothing to remember, nothing to reset.
+                        Default `false`.
+
+on_terminal_hide        Function called when |muxim.terminal.toggle()| hides
+                        a terminal and the window has no non-terminal
+                        alternate buffer to go back to, which is the case in
+                        a window that has only ever shown terminals.
+                        Receives the terminal's buffer. Without it the
+                        terminal stays on screen, in terminal-normal mode.
+
+==============================================================================
+TAB ROOTS                                                *muxim-tab-roots*
+
+Each tab can have its own working directory, using Neovim's |:tcd|. A new
+window (`<prefix>c`) inherits the root of the tab it was opened from, so
+working in a subdirectory stays that way; other tabs keep theirs.
+
+`<prefix>R` or |:MuximTabRoot| sets the current tab's root. With no argument
+it uses the focused terminal's directory, read from OSC 7 if your shell emits
+it (|terminal-osc7|, exposed as `b:osc7_dir`) and otherwise from
+`/proc/<pid>/cwd`, which needs no shell configuration on Linux.
+
+The tabline marks a tab whose root differs from the session root, and says
+nothing for tabs at the session root.
+
+The SESSION root (the global |current-directory|) never moves: the socket
+name is derived from it when the session starts, so inside a session use
+|:tcd|, never |:cd|.
+
+==============================================================================
+KEYS                                                          *muxim-keys*
+
+Every binding is a real keymap in normal and terminal mode: `:map <C-b>`
+shows all of them, which-key sees them, 'timeoutlen' applies. `<prefix>?`
+or |:MuximKeys| opens the cheatsheet float (q or <Esc> closes).
+
+Defaults ~
+                                                     *muxim-keys-defaults*
+  c            new window (tab with a terminal, insert mode)
+  d            detach client
+  t            toggle the terminal for this tab
+  n / p / l    next / previous / last window
+  1..9         select window N
+  ,            rename window
+  &            kill window (confirms)
+  x            kill pane (confirms)
+  o / ;        next / previous pane
+  <Up> <Down> <Left> <Right>          select pane by direction
+  <M-Up> <M-Down> <M-Left> <M-Right>  resize pane by 5
+  z            zoom pane (toggle)
+  [            copy mode (terminal-normal mode)
+  a            agent drawer (|muxim-agents|)
+  C            new window running an agent (|muxim-agents-plugin|)
+  A  <M-n>     go to a blocked agent (|muxim-agents|). <M-n> is tmux's
+               alert key and needs Option-as-Meta on a Mac terminal, so `A`
+               is there for everyone else.
+  w            choose window (picker)
+  s            choose session (picker)
+  ?            this list
+  R            set this tab's root from the focused terminal
+
+There is deliberately no split binding: panes are ordinary windows, so
+creating them is native vocabulary (|CTRL-W_s| / |CTRL-W_v|). Bind `"` or
+`%` in setup() if you want the tmux keys back.
+
+Pane movement IS bound, which is not a contradiction. Neovim ships no
+terminal-mode mappings, so leaving a terminal pane natively means
+`<C-\><C-n>` and then |CTRL-W_h|. Every prefix key is mapped in terminal mode
+and stops insert for you, so `<prefix>o`, `<prefix>;` and the arrows are the
+short way out of a terminal. In a file pane they duplicate |CTRL-W_w|,
+|CTRL-W_p| and |CTRL-W_h|; use either.
+
+The prefix ~
+                                                       *muxim-keys-prefix*
+The bare prefix followed by an unbound key swallows that key and echoes
+"not bound", like tmux. `<prefix><prefix>` sends the prefix through: in a
+terminal it goes to the shell (readline `<C-a>`/`<C-b>`); in normal mode it
+runs the native command (increment, page up).
+
+Any global mapping the prefix shadows is saved and restored if setup() moves
+the prefix elsewhere. Buffer-local mappings are never touched.
+
+Custom bindings ~
+                                                       *muxim-keys-custom*
+>lua
+  keys = {
+    f = { function() require('muxim.pickers').sessions({ '~/src' }) end,
+          'choose session' },
+    gg = { my_fn, 'multi-char suffixes work' },
+  }
+<
+Each value is `{ fn, desc }` (desc feeds the cheatsheet and which-key) or a
+bare function.
+
+Disabling ~
+                                                      *muxim-keys-disable*
+`keys = false` in setup() binds nothing. Disable a single default by setting
+it to `false`: >lua
+
+  keys = { x = false }
+<
+==============================================================================
+COMMANDS                                                  *muxim-commands*
+
+:MuximInfo                                                  *:MuximInfo*
+    Attachment, runtime directory, prefix, nested state, live sessions.
+    The one command to paste into an issue.
+
+:MuximSessions                                          *:MuximSessions*
+    List live sessions without opening a picker.
+
+:MuximKeys                                                  *:MuximKeys*
+    The cheatsheet float, reachable even when the prefix is broken.
+
+:MuximClean                                                *:MuximClean*
+    Delete stale socket files, report how many.
+
+:MuximAgentSetup[!] [agent] [dir]                     *:MuximAgentSetup*
+    Install muxim's agent hooks into your Claude settings, or remove them
+    with `!`. With no directory it covers EVERY account muxim knows about,
+    which is the same set |:checkhealth| warns about; name a directory to
+    target one. Idempotent; refuses to touch settings it cannot parse. A
+    leading agent name targets that agent alone, and an agent that needs no
+    install says so rather than failing. See |muxim-agents|.
+
+:MuximAgent [agent] {args}                                 *:MuximAgent*
+    Open a tab running an agent already wired to report to this session, by
+    passing muxim's own plugin directory. A leading agent name chooses which
+    agent; without one it is the first muxim knows about. Nothing outside
+    muxim is written.
+    Arguments are split on whitespace, so a quoted prompt does not survive:
+    type it in the agent instead. See |muxim-agents-plugin|.
+
+:MuximAgents                                              *:MuximAgents*
+    Toggle the agent drawer: every session, with its agents. See
+    |muxim-agents|.
+
+:MuximTabRoot [dir]                                       *:MuximTabRoot*
+    Set this tab's root to {dir}, or to the focused terminal's cwd with no
+    argument. See |muxim-tab-roots|.
+
+==============================================================================
+PICKERS                                                    *muxim-pickers*
+
+`<prefix>s` picks a session: every live one, plus any directory in the
+`projects` option that has none. `<CR>` attaches to a live session and
+spawns one for a dead directory; `x` kills, `X` force-kills. Sessions
+sharing a basename are told apart by their parent directory, and match on
+their path as well as their name.
+
+`<prefix>w` is a tree, like tmux's `choose-tree`: every live session, with its
+windows underneath, the attached session first and the window you are in
+starred. `<CR>` on a window goes to it, on a session attaches to it. Choosing
+a window in another session tells that session to switch to it first.
+
+With telescope installed the pickers use it, and |<prefix>w| previews what
+that window is showing: its viewport with treesitter highlighting and its
+cursor line marked, not the top of the buffer, so a terminal shows its latest
+output. Hovering a session previews its active window.
+
+The preview fits its window on both axes: as many lines as the window is
+tall (never more than `session.PREVIEW_LINES`), re-anchored on the cursor if
+the window's own top line would leave it out, and each line cut to the
+window's width with an ellipsis, measured in display cells. For another
+session the region is fetched with `--remote-expr` (~2ms, no config sourced)
+and fitted there, so only visible text crosses the wire.
+
+|<prefix>s| previews the session's own state instead: its root, its windows,
+what is running in each terminal (named after the process, not the shell,
+with elapsed time), agent states with their detail, and unsaved buffers.
+`session.info()` produces it as JSON in the session that owns it,
+`session.render()` turns that into lines and highlight marks locally.
+
+Without telescope, |vim.ui.select()|, which has no preview.
+
+Picker API ~
+                                                        *muxim-picker-api*
+A backend is a table with `sessions(dirs)` and `windows()`. Build one from
+the data layer: `require('muxim.sources')` produces entry lists
+(`sources.display(entry)` returns display text plus telescope-shaped
+highlight spans, `sources.ordinal(entry)` the text to match on), and
+`require('muxim.actions')` consumes them (`enter`, `connect`,
+`select_window`, `kill(entry, force, callback)`). Pass the table as the
+`picker` option.
+
+==============================================================================
+AGENTS                                                      *muxim-agents*
+
+muxim watches coding agents running in its terminals and tells you which one
+is waiting on YOU. Claude Code first; the transport is vendor-neutral.
+
+STATE is reported, never guessed: `working`, `blocked` and `done` only ever
+come from a hook, because a running test suite and an agent waiting for you
+look identical from the outside. muxim never scrapes terminal output.
+
+EXISTENCE is different, and is read from the process table: an agent running
+in a managed terminal is listed as `running`, "no state reported yet", even if
+it has never said a word. Whether a process exists is a fact, not a guess.
+
+How the hooks get there ~
+                                                     *muxim-agents-plugin*
+muxim writes its own Claude Code plugin directory under `stdpath('data')`, and
+`setup()` keeps it current. Two ways to use it touch nothing you own:
+
+    <prefix>C          open a tab running an agent already wired up
+    :MuximAgent {args} the same, with your own arguments
+
+Both run `claude --plugin-dir <muxim's directory>`, whose hooks fire with your
+`settings.json` untouched. If you type agents at a shell prompt instead, add one
+line to your shell rc, once, and everything you type is covered, including your
+own aliases:
+>sh
+    [ -n "$MUXIM_SHELL_INIT" ] && . "$MUXIM_SHELL_INIT"
+<
+muxim generates that file, exports the variable into every terminal it opens,
+and keeps it current. It holds no machine-local path, so the same rc line works
+on every machine. Outside a muxim terminal the variable is unset and the line
+does nothing.
+
+The same line keeps muxim's `nvim` wrapper first on `PATH` when your rc
+rebuilds it, which is why it belongs AFTER anything in your rc that sets
+`PATH`. This is the fast path only: the wrapper forwards without starting
+an editor. Without it, a nested start still routes itself from the plugin
+at |VimEnter|, at the cost of a full startup first. The generated file is
+POSIX sh, so bash and zsh can source it; fish cannot. On fish, skip the
+line: nvim routing works regardless, and |:MuximAgentSetup| wires typed
+agents through your settings file instead.
+
+`CLAUDE_CODE_PLUGIN_SEED_DIR` looks like it would remove even that, and does
+not: a seeded plugin's hooks never fire. Tested, twice.
+
+Installing into your settings ~
+                                                      *muxim-agents-hooks*
+This is the fallback, for an agent typed at a shell prompt with no cooperation
+at all, which is the one case argv cannot reach. You should not need to go
+looking for it: when muxim can SEE an agent running in one of its terminals and
+has never heard from it, the drawer says so and offers it.
+>
+    ! claude is running but not reporting
+      <CR> to wire it up
+<
+`<CR>` on that row does exactly what |:MuximAgentSetup| does. The row only
+appears while an agent really is running unheard, and goes away once it is
+wired.
+
+Run |:MuximAgentSetup| once. It writes a hook script to
+`stdpath('data')/muxim/agent-hook` and adds entries pointing at it to your
+Claude settings (`$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude`). It is
+idempotent, it leaves every other setting and anyone else's hooks alone, it
+refuses outright if that file is not valid JSON, and `:MuximAgentSetup!`
+removes it again.
+
+`:MuximAgentSetup {dir}` installs into one named Claude config directory;
+with no directory it covers every account it knows about. Use `config_dirs`
+if you run more than one account. A config directory belongs to ONE agent,
+so once muxim knows about a second agent that installs, name it:
+`:MuximAgentSetup claude {dir}`. muxim refuses rather than guessing: a shell alias that sets
+`CLAUDE_CONFIG_DIR` per session is invisible to nvim, so muxim can only guess
+the one it inherited. |:checkhealth| lists every directory it knows about and
+whether each is installed.
+
+The entry muxim writes carries NO machine-specific path, because a settings
+file is very often shared between machines through a dotfiles or notes repo:
+
+    "${MUXIM_HOOK:-$HOME/.local/share/nvim/muxim/agent-hook}" 'blocked' ...
+
+`$MUXIM_HOOK` is exported into every terminal muxim opens, so the hook always
+resolves to the copy belonging to the muxim that opened the terminal. The
+`$HOME` fallback is written UNEXPANDED and expanded by the shell at hook
+time, so the same entry works on a Mac and on Linux. muxim recognises its own
+entries by a stable marker rather than by path, so an install from another
+machine is replaced rather than piling up beside yours.
+
+That entry is harmless outside muxim: the script needs `$MUXIM_TERM` and
+`$MUXIM_SERVER` in its environment to do anything, and every terminal muxim
+opens carries them (plus `$MUXIM_NVIM`, the nvim to report to). A Claude
+session started anywhere else runs it, finds nothing, and exits 0.
+
+Only terminals MUXIM OPENED can report. A terminal you started another way
+is still adopted, still listed and still discovered by `ps`, but nothing in
+it can report state, because muxim injects the environment at |jobstart| and
+cannot add it afterwards. |:checkhealth| counts them.
+
+The hooks are installed `async`, so muxim can never make an agent wait on a
+busy editor.
+
+There is no `PATH` shim and no wrapper binary. muxim tried that first: a
+shim only wins if it is first on `PATH`, and any shell rc that prepends puts
+it behind the real binary.
+
+The events used, and why ~
+
+  PermissionRequest                blocked   it wants permission, and the
+                                             payload names WHICH tool
+  PermissionDenied                 working   the denial hands control back,
+                                             so the blocked row unblocks
+  Notification/permission_prompt   blocked   an interactive agent wants
+                                             permission for a tool
+  Notification/idle_prompt         blocked   it has gone quiet waiting
+  Notification/agent_needs_input   blocked   a BACKGROUND agent wants input
+  Notification/agent_completed     done      a background agent finished
+  Elicitation                      blocked   an MCP server asked for input
+  ElicitationResult                working   and it was answered
+  UserPromptSubmit                 working
+  PreToolUse                       working   a tool started
+  PostToolUse                      working   a tool finished: the earliest
+                                             signal after a permission grant
+  PostToolUseFailure               working   or failed; the turn continues
+  PreCompact                       working   compaction is visible instead
+                                             of inferred
+  PostCompact (auto)               working   auto-compaction is mid-turn
+  PostCompact (manual)             idle      manual /compact is not
+  Stop                             idle      the turn ended, so it is no
+                                             longer working
+  StopFailure                      idle      the turn DIED. Without it an
+                                             agent whose turn errored sits
+                                             at working forever
+  SubagentStart                    working   a sub-agent started
+  SubagentStop                     ended     and finished
+  SessionStart (startup, resume, fork)  idle    so it appears at once
+  SessionEnd (logout, prompt_input_exit, other)  ended   removes the entry
+
+The two `agent_*` matchers are the background-agent band and never fire for
+an agent you are typing to; `permission_prompt` and `idle_prompt` are the
+interactive ones. Both are installed because both cases are real.
+
+`SessionStart` and `SessionEnd` are matched on purpose. Unmatched, `/clear`
+would make muxim forget a live agent and an auto-compaction would overwrite
+`working` with `idle`.
+
+What the hook reads from the payload ~
+                                                    *muxim-agents-payload*
+Claude Code writes a JSON payload to the hook's stdin. muxim passes it through
+to nvim base64-encoded, as one extra argument, and reads three fields from it:
+
+  `session_id`             identifies the agent, so two agents in one terminal
+                         do not erase each other.
+  `agent_id`, `agent_type` (`Subagent*`) identify a SUB-agent and give it the
+                         name you see, e.g. `Explore`.
+  `background_tasks`       (`Stop`) the live sub-agents, used to reconcile.
+  `tool_name`              (`PermissionRequest`, `PermissionDenied`) what it is
+                         waiting to run or was refused, so a row says
+                         "wants to use Bash" or "denied Bash".
+  `last_assistant_message` (`Stop`) what the agent actually said, shown as the
+                         detail instead of a fixed string.
+  `error`                  (`StopFailure`) why the turn died.
+  `message`                (`Notification`, `Elicitation`) the real
+                         notification text, or what the MCP server asked.
+
+None of it is required. The state is an ARGUMENT, so an agent that writes no
+payload, or a machine with no `base64`, reports exactly as before with the
+detail the hook was given. A payload larger than 128KB is dropped rather than
+truncated, because a truncated JSON decodes as garbage and a command line has
+a length limit that a large tool input would find. The cap is measured against
+`ARG_MAX` (1MB on macOS, 2MB on Linux) with base64's 4/3 cost allowed for.
+
+This is why the payload is encoded rather than escaped: it contains arbitrary
+text from a model, including both quote characters and newlines, and it is
+carried through `/bin/sh`, a shell expansion and |--remote-expr| before Lua
+sees it. base64's alphabet cannot terminate a quote at any of those layers.
+
+`Stop` is used ONLY to end `working`. It fires at the end of every assistant
+turn, so it says nothing about whether the agent wants you and must never mean
+`done`; but it is the only event that says the turn is over, and without it a
+report of `working` would stand until the 60s idle notification or the session
+ended.
+
+When nothing reports ~
+
+Claude Code says nothing at all when a hook command does not exist, so
+|:checkhealth| is where breakage surfaces. It stats the path named inside
+your settings, not just the one muxim would write, and it compares the
+installed hook script against the current one. An entry naming a path that
+does not exist here is an ERROR; an entry or a script written by an older
+muxim is a warning telling you to run |:MuximAgentSetup| again.
+`<runtime dir>/agents.log` records every report that arrives, and every
+report the hook could not deliver.
+
+Adding another agent ~
+                                                    *muxim-agents-vendors*
+Every agent muxim knows about is a module under `muxim.agents.`, named in
+`agents.VENDORS`. Only `name` and `title` are required; each of the rest is
+optional, and an agent that leaves one out simply never reaches that part of
+muxim:
+
+  `install(dir)` `uninstall(dir)` `installed(dir)` `config_dirs()`
+                     writes into a settings file the agent owns. An agent
+                     with no `install` is never offered one, and
+                     |:MuximAgentSetup| says it needs no setup rather than
+                     failing.
+  `launch(extra)`      argv for |:MuximAgent|, or nil plus a reason.
+  `env()`              variables to inject into every muxim terminal.
+  `shell_init()`       a shell function for the generated rc file.
+  `wired(argv)`        whether a RUNNING process is already reporting, read
+                     from its argv rather than waited out.
+  `read(payload)`      what to take from the agent's own JSON payload:
+                     `{ detail, sub = { id, type }, children }`. The field
+                     names are the AGENT'S, so they live in the vendor.
+  `ensure()`           write whatever it needs, called from `setup()`.
+  `attach(group)`      autocmds, for an agent that signals through the
+                     terminal rather than through hooks.
+  `health(health)`     its own |:checkhealth| section.
+
+The state contract is the same for all of them, and is the one thing that is
+not optional: `$MUXIM_HOOK <state> <detail> <name>`, with `state` one of
+`working`, `blocked`, `done`, `idle`, `ended`.
+
+One event, many listeners ~
+                                                      *MuximAgentState*
+A state change fires one `User` autocmd, `MuximAgentState`, carrying
+`{ state, detail, name, here }` in its `data`. When `here` is true the change
+happened in THIS session and `buf` is the terminal it happened in; when it is
+false the agent is in another session, `data.session` names that session and
+there is no `buf` to jump to. Everything that reacts to agent
+state is a LISTENER on it rather than something `report()` calls: the tabline
+redraws itself, the session republishes its state file, and an open drawer
+re-renders. Your own config can listen to the same event: >lua
+
+    vim.api.nvim_create_autocmd('User', {
+      pattern = 'MuximAgentState',
+      callback = function(args)
+        if args.data.state == 'blocked' then ... end
+      end,
+    })
+<
+The event fires SYNCHRONOUSLY. A listener that calls |vim.schedule()| during a
+quit cancels the quit, silently, which is a bug muxim has already had once.
+
+Sub-agents ~
+                                                   *muxim-agents-subagents*
+An agent that spawns sub-agents shows them nested under it, named by their
+type (`Explore`, `Plan`, whatever you have defined) rather than by the agent
+that started them.
+
+A terminal's state is a ROLLUP over everything in it: the most urgent of the
+agent and its children, by the same ranking the tabline uses for a tab. This
+is not cosmetic. A real Claude Code session fires `Stop` while its sub-agents
+are still running, so the top-level agent goes `idle` with live work
+underneath it; without the rollup the tabline would call that terminal idle
+while three agents worked in it.
+
+Sub-agents are reconciled, not merely tracked. Every `Stop` carries the live
+sub-agent list, so a sub-agent that dies without reporting is pruned on the
+parent's next turn instead of lingering forever. A parent that ends takes its
+children with it.
+
+Agents in other sessions ~
+                                                       *muxim-agents-fleet*
+An agent blocking in a session you are NOT looking at is the case muxim exists
+for, so every session watches the others by default and notifies you where you
+actually are.
+
+It reuses what is already there: sessions publish their agents on every state
+change, and a session watches that directory with |vim.uv|'s file-event API.
+No polling, no lead process, and a session with no UI stays silent.
+
+The same rules as a local agent apply: only `blocked` notifies, and only on the
+EDGE, so one wait is one notification however many times its reason is
+reworded. A session that starts while agents are already blocked elsewhere
+seeds itself quietly rather than announcing a backlog.
+
+The default message names the agent, the sub-agent if there is one, where it
+is, and why: >
+
+    muxim: claude is blocked in tab 2 (wants to use Bash)
+    muxim: claude/Explore is blocked in tab 2 (wants to use Bash)
+    muxim: claude is blocked in pigeon-api (waiting for you)
+    muxim: claude/general-purpose is blocked in pigeon-api (wants to use Write)
+<
+To render them yourself, set `notify` to a function. It receives every
+notification, local and remote, so one handler covers the fleet: >lua
+
+    require('muxim').setup({
+      agents = {
+        notify = function(entry)
+          Snacks.notify.warn(('%s wants you%s'):format(
+            entry.name, entry.here and '' or (' in ' .. entry.session)))
+        end,
+      },
+    })
+<
+`agents.who(entry)` and `agents.where(entry)` are the helpers the default
+message uses, so a custom handler can reuse the naming without repeating it.
+
+The drawer ~
+                                                     *muxim-agents-drawer*
+`<prefix>a` or |:MuximAgents| toggles a drawer on the right: every live
+session, with its agents nested underneath, the session you are in marked
+`*`. `<CR>` goes to whatever is under the cursor. An agent in THIS session
+means jumping to its terminal; anything in another session means connecting
+to it, with no second prompt, because choosing the row was the choice. `q`
+closes, `r` refreshes.
+
+It updates itself. Sessions publish their agents and their terminals' pids to
+`<runtime dir>/agents/`, one small file each, and an open drawer watches that
+directory with |vim.uv|'s file-event API, so a reported state change anywhere
+in the fleet redraws every drawer at once, with no polling. The open drawer
+also re-runs one `ps` every few seconds, which is what notices an agent
+starting or exiting without a hook. Sessions nobody is looking at cost
+nothing, and none is privileged: there is no lead process to elect, lose, or
+orphan.
+
+The drawer is an ordinary window, so it belongs to the tab you opened it in,
+like any split. Jump to another tab and it stays behind; press the key again
+to get one there.
+
+States are `working` (`~`), `blocked` (`!`), `done` (`+`) and `idle`.
+Blocked terminals are also marked in the tabline and the window picker.
+`<prefix>A`, or `<prefix><M-n>` for tmux's next-window-with-alert key, goes
+straight to a blocked agent without opening anything, cycling if more than one
+is waiting. `<M-n>` needs Option-as-Meta enabled in a Mac terminal; `A` works
+everywhere.
+
+Rows are highlighted through linked groups you can override, shared by the
+drawer, the picker rows and the previews: `MuximAgentBlocked`,
+`MuximAgentWorking`, `MuximAgentDone`, `MuximAgentIdle`, `MuximAgentRunning`,
+`MuximAgentSession`, `MuximAgentCurrent`, `MuximAgentEmpty`,
+`MuximPreviewHeading`, `MuximPreviewPath`, `MuximPreviewJob`,
+`MuximPreviewCursor`. They are defined
+by |muxim.setup()| and refreshed on |ColorScheme|, so they exist whether or
+not the drawer has ever been opened.
+
+Build your own ~
+                                                        *muxim-agents-api*
+>lua
+  local agents = require('muxim.agents')
+  agents.blocked()          -- entries: buf, tab, name, state, detail
+  agents.tracked()          -- all of them, blocked first
+  agents.focus_blocked()    -- go to one, cycling
+  agents.published(path)    -- what another session has published
+  agents.fleet_view(cb)     -- every live session, with its agents
+  agents.watch(cb)          -- called when any session publishes a change
+  agents.report(buf, state, detail, name)   -- what a hook calls
+  require('muxim.drawer').toggle()
+<
+`User MuximAgentState` fires on every change, carrying `buf`, `state`,
+`detail` and `name`, so your own behaviour (a statusline, a desktop
+notification, jump-on-block) needs no patching. It fires only in the session
+that RECEIVED the report: to follow the whole fleet, use `agents.watch()`,
+which is what the drawer does.
+
+Options (under `agents = {...}`):
+
+  notify        `'unfocused'` (default), `true`, `false`, or a function
+                receiving one entry table. Fields: `state`, `detail`, `name`,
+                `session`, and `here` (true when the agent is in THIS
+                session). A local entry also carries `buf` and `tab`; a
+                sub-agent carries `parent` and `parent_name`. One function
+                receives both local and fleet notifications, so plug in
+                snacks/noice/fidget once and it covers everything.
+  notify_fleet  `true` (default). Watch the other sessions and notify when an
+                agent blocks in one of them. `false` stops that; `notify`
+                still governs the format. muxim never
+                notifies a session with no UI attached, whatever this says.
+                Notifications are EDGE-triggered: entering `blocked` notifies
+                once, and a blocked agent that changes its reason does not
+                notify again. `'unfocused'` means the editor is unfocused
+                (|FocusLost|) or another buffer is current; a terminal that
+                does not report focus leaves muxim assuming it has focus,
+                which is the behaviour it had before.
+  commands      Process names that count as an agent, as a list or as a
+                map to booleans. Default `claude`, `codex`, `pi`,
+                `opencode`, `aider`. A leading dot and a
+                `-wrapped`/`-unwrapped` suffix are stripped before matching,
+                so nix's `.claude-wrapped` is recognised even when Linux
+                truncates it to 15 characters. Anything else needs an entry.
+  claude        `{ config_dirs = { ... } }`, extra Claude config directories
+                to install into and to check. Use it when you run more than
+                one account.
+  marks         Glyphs per state, merged over the defaults.
+  drawer        `{ width, side = 'left' | 'right', highlights, format }`.
+                `format(agent)` returns the text of one row.
+
+Any agent that can run a command on a lifecycle event can report: call
+`"$MUXIM_HOOK" <state> <detail> <name>` from it, with `$MUXIM_SERVER` and
+`$MUXIM_TERM` inherited from the terminal. The first argument is the STATE;
+a mix-up is recorded in `<runtime dir>/agents.log` with the reason, rather
+than silently ignored. `<name>` is what the drawer shows, and without it a
+row is named after the terminal's own command rather than the agent's.
+
+==============================================================================
+TABLINE                                                    *muxim-tabline*
+
+The tmux status line: server name left, numbered windows, clock right.
+Options (under `tabline = {...}`):
+
+  sections      List of functions returning statusline text. Defaults:
+                server, tabs, spacer, clock (see below).
+  highlights    Table of highlight overrides, see |muxim-highlights|.
+  showtabline   Value for 'showtabline' (default 2); `false` leaves it.
+  refresh       Redraw interval in ms (default 15000, drives the clock).
+
+Sections ~
+                                                  *muxim-tabline-sections*
+A section is `function() return string end` returning statusline syntax
+(escape user text with `require('muxim.tabline').escape()`). Built-ins
+live on `require('muxim.tabline').sections`: `server`, `tabs`, `spacer`,
+`clock`. Windows renamed with `<prefix>,` set `t:muxim_name`, which the
+`tabs` section prefers over the buffer name.
+
+Sections run on every redraw, so they must be pure and allocation-light:
+no file reads, no |system()|, no RPC. A section that needs outside state
+should read a cached value that something else refreshes (an autocommand,
+a timer, or the |muxim-events| below). A failing section renders empty
+rather than throwing, but a slow one slows every redraw.
+
+==============================================================================
+HIGHLIGHTS                                              *muxim-highlights*
+
+  MuximTab         window entry
+  MuximTabSel      current window entry
+  MuximTabServer   server name
+  MuximTabTime     clock
+  MuximTabFill     background fill
+
+Defined with sensible defaults, re-applied on |ColorScheme|, overridable via
+the tabline `highlights` option.
+
+==============================================================================
+TERMINALS                                                *muxim-terminals*
+
+Managed terminals (opened by the plugin, plus every |:terminal| if you set
+`adopt_foreign_terminals = true`) are owned by the tab that created them.
+Everything in this section is about managed terminals only: an excluded
+terminal is never reaped, never reused by |muxim.terminal.toggle()|, and
+never put into terminal mode by `enter_insert`.
+Ownership is sticky: viewing a terminal from another tab does not transfer
+it. Closing the owner tab reaps its hidden terminals, force-killing their
+jobs, and says so; `keep_busy_terminals` spares ones with a running
+foreground child. A terminal registered by a still-open tab is never reaped.
+
+`require('muxim.terminal').toggle()` is one key for the terminal of this tab.
+
+It works by swapping the buffer in the window you are in, never by opening or
+closing windows: your layout is yours. Showing it takes over the current
+window, reusing a registered, hidden or orphaned MANAGED terminal before
+opening a new one, and returns that buffer. Hiding it puts back what the
+window was showing (the alternate buffer, unless that is another terminal),
+falls back to `on_terminal_hide` when there is nothing to put back, and
+returns `nil`. `<prefix>t` is bound to it. There is deliberately no unprefixed default: a
+bare terminal-mode mapping is taken away from every program running in every
+terminal, and the prefix exists so muxim claims exactly one key and hands it
+back with `<prefix><prefix>`. Bind your own in normal and terminal mode if you
+want one.
+
+`require('muxim.terminal').open(cmd)` takes a command as data: a string
+runs through 'shell', a list is executed directly. Nothing is concatenated
+into an ex command, so `%`, `#`, spaces, and quotes are safe.
+
+==============================================================================
+API                                                            *muxim-api*
+
+The stable surface (see the project's api-freeze notes for what is frozen):
+
+  require('muxim').setup(opts)
+  require('muxim.server')      open(dir[, cb]), list(),
+                                   spawn_async(dir, cb[, opts]),
+                                   socket_for(dir), is_live(path),
+                                   speaks_nvim(path), on_gone(path, ms, cb),
+                                   hand_off(path, cmd), kill(path, force)
+
+A spawned session reports READY over RPC once its config has run and its
+`setup()` finished, so attaching never lands you in a half-loaded session.
+Nothing polls for it: the spawn settles on that announcement, on the child's
+|on_exit|, or on a give-up deadline (30s, `opts.timeout`). Likewise a killed
+session's death is detected by watching its socket disappear, not by sampling.
+`opts.init` runs the child with a specific `-u` init file (used by the tests).
+  require('muxim.terminal')    open(cmd), open_in_tab(cmd), ensure(),
+                                   send(buf, cmd), toggle()
+  require('muxim.pickers')     sessions(dirs), windows()
+  require('muxim.resume')      attach(path), last()
+  require('muxim.sources')     entry lists for picker backends
+  require('muxim.actions')     entry consumers for picker backends
+
+==============================================================================
+EVENTS                                                      *muxim-events*
+
+Four |User| autocmd patterns are the extension surface: >lua
+
+  vim.api.nvim_create_autocmd('User', {
+    pattern = 'MuximTermClose',
+    callback = function(ev) print(ev.data.buf, ev.data.pid) end,
+  })
+<
+  MuximTermOpen      a managed terminal opened          data: buf
+  MuximTermClose     a managed terminal's job exited    data: buf, pid,
+                                                        exit_code (negative
+                                                        when the job was
+                                                        killed rather than
+                                                        exiting)
+  MuximServerSpawn   a project server was spawned       data: path, dir
+  MuximAgentState    an agent changed state              data: buf, state,
+                                                         detail, name
+                                                               detail
+
+These fire in nested instances too.
+
+==============================================================================
+TROUBLESHOOTING                                    *muxim-troubleshooting*
+
+Run `:checkhealth muxim`. It verifies the Neovim version and |:connect|,
+the runtime directory (existence, mode, writability, name budget), the
+server binary, the socket inventory (live/stale), dead sockets sitting
+outside the runtime directory, this instance's claim, the picker backend,
+the prefix mappings, the agent watcher (whether the hooks are installed, and
+what is reporting), and tabline ownership.
+
+Common cases:
+
+- "prefix does nothing": something mapped over it after setup();
+  checkhealth's Keys section says so. |:MuximKeys| works regardless.
+- "my session vanished": it detached, it did not die. `<prefix>s` lists it;
+  `require('muxim.resume').attach(path)` reattaches to it directly.
+- "spawning a project failed": the failure notification quotes the child's
+  own stderr. A spawned server is `v:progpath` run fresh, so a broken user
+  config breaks it in ways your running instance does not show. Spawning
+  never blocks the editor; you keep working while it starts.
+- inside a session's terminal, plain `nvim [file]` opens in the owning
+  session and the nested instance exits; with flags or a blocking edit
+  (a `COMMIT_EDITMSG`) it stays a passive real editor. That is nested
+  detection (`$NVIM`). Override with `setup({ nested = true })`.
+
+==============================================================================
+FAQ                                                            *muxim-faq*
+
+Why is my memory usage high?~
+  N sessions x M language servers. Kill sessions you are done with
+  (`<prefix>s`, then `x`).
+
+Can quitting always land me somewhere specific (a hub)?~
+  Replace `on_last_close`: `server.open(hub_dir, cb)` spawns or attaches
+  without freezing, then `server.hand_off(hub_socket, 'tabfirst')` from the
+  callback. hand_off refuses to quit a server with unsaved buffers.
+
+Does this replace tmux for remote work?~
+  For the usual meaning, yes. Ssh to a machine and run muxim there: its
+  sessions are local to THAT machine, exactly as a tmux server is. Your
+  connection drops, the client dies, the sessions keep their buffers and
+  language servers, and you reattach when you ssh back in.
+
+  What muxim does NOT do is attach a UI on one machine to a session on
+  another. Sessions are addressed as socket PATHS, so nothing can see
+  another host's. Nvim itself can do this (|serverstart()| and
+  |sockconnect()| both take "host:port", normally over an ssh tunnel since
+  RPC has no auth), so this is a muxim limitation, not a Neovim one.
+
+Why 0.12?~
+  Attaching a UI to a running server is |:connect|, new in 0.12.
+
+vim:tw=78:ts=8:noet:ft=help:norl:

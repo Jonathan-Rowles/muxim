@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -u
+cd "$(dirname "$0")/.." || exit 1
+
+spec_runtime_dir=""
+
+cleanup_runtime_dir() {
+    [ -n "$spec_runtime_dir" ] || return 0
+    [ -s "$spec_runtime_dir/test-pids" ] && xargs kill < "$spec_runtime_dir/test-pids" 2>/dev/null
+    pkill -f -- "--listen $spec_runtime_dir" 2>/dev/null
+    rm -rf "$spec_runtime_dir"
+    spec_runtime_dir=""
+    XDG_RUNTIME_DIR=""
+}
+trap cleanup_runtime_dir EXIT
+
+if command -v timeout >/dev/null 2>&1; then
+    spec_timeout="timeout -k 10 90"
+elif command -v gtimeout >/dev/null 2>&1; then
+    spec_timeout="gtimeout -k 10 90"
+else
+    spec_timeout=""
+fi
+
+run_spec() {
+    local t=$1; shift
+    spec_runtime_dir="$(mktemp -d /tmp/muxim-test.XXXXXX)"
+    export XDG_RUNTIME_DIR="$spec_runtime_dir"
+    if [ -n "${isolate_data:-}" ]; then
+        mkdir -p "$spec_runtime_dir/data"
+        export XDG_DATA_HOME="$spec_runtime_dir/data"
+    fi
+    mkdir -p "$spec_runtime_dir/state"
+    export XDG_STATE_HOME="$spec_runtime_dir/state"
+    echo "== $t"
+    local output_file="$spec_runtime_dir/spec-output"
+    $spec_timeout nvim --headless "$@" \
+        "+lua local ok, err = xpcall(dofile, debug.traceback, '$t'); print(ok and 'spec ended without H.finish' or err); vim.cmd('cquit 1')" >"$output_file" 2>&1
+    local code=$?
+    local output
+    output=$(cat "$output_file")
+    printf '%s\n' "$output"
+    if ! printf '%s' "$output" | grep -q "^$(basename "$t" .lua): [0-9]* passed"; then
+        skipped="$skipped $t"
+    fi
+    if (( code == 124 )); then
+        echo "TIMEOUT after 90s: $t"
+    fi
+    cleanup_runtime_dir
+    unset XDG_STATE_HOME
+    echo
+    return $code
+}
+
+unset NVIM MUXIM_SERVER
+fail=0
+skipped=""
+
+isolate_data=1
+export MUXIM_PLUGIN_DIR="${MUXIM_PLUGIN_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy}"
+for t in tests/*_spec.lua; do
+    [ -e "$t" ] || continue
+    run_spec "$t" -u tests/minimal_init.lua -i NONE || fail=1
+done
+isolate_data=
+unset XDG_DATA_HOME
+
+if [ -n "$skipped" ]; then
+    echo "!! SPECS THAT REPORTED NOTHING:$skipped"
+    echo "!! a spec that prints a reason and exits 0 is invisible in a green suite"
+fi
+if (( fail )); then
+    echo "TESTS FAILED"
+    exit 1
+fi
+echo "ALL TESTS PASSED"
