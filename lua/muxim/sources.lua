@@ -2,6 +2,7 @@ local server = require('muxim.server')
 
 local M = {}
 
+---@type string[]|fun(): string[]
 M.project_dirs = {}
 
 local function configured_dirs()

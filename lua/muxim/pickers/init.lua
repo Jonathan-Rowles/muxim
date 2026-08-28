@@ -33,6 +33,7 @@ local function call(name, ...)
   return fn(...)
 end
 
+---@param dirs string[]?
 function M.sessions(dirs) return call('sessions', dirs) end
 
 function M.windows() return call('windows') end

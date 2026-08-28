@@ -69,6 +69,8 @@ function M.job_is_running(buf)
   return vim.fn.jobwait({ job }, 0)[1] == -1
 end
 
+---@param buf integer? defaults to the current terminal
+---@return integer?
 function M.pid(buf)
   buf = buf or M.current()
   return buf and vim.b[buf].terminal_job_pid or nil
@@ -82,6 +84,8 @@ function M.label(buf)
   return nil
 end
 
+---@param cmd string|string[]? argv or command, default 'shell'
+---@return integer buf
 function M.open(cmd)
   vim.cmd('enew')
   local buf = vim.api.nvim_get_current_buf()
@@ -101,6 +105,8 @@ function M.open(cmd)
   return buf
 end
 
+---@param cmd string|string[]? argv or command, default 'shell'
+---@return integer buf
 function M.open_in_tab(cmd)
   local root = require('muxim.root').get()
   vim.cmd('$tabnew')

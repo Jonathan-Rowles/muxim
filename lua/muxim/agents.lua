@@ -14,10 +14,12 @@ M.STATE_GROUPS = {
 
 M.enabled = true
 
+---@type boolean|'unfocused'|fun(notice: table)
 M.notify = 'unfocused'
 
 M.focused = true
 
+---@type boolean|'unfocused'|fun(notice: table)
 M.notify_fleet = true
 
 function M.may_notify()
@@ -799,8 +801,9 @@ function M.where(entry)
 end
 
 function M.deliver(entry)
-  if type(M.notify) == 'function' then
-    pcall(M.notify, entry)
+  local notify = M.notify
+  if type(notify) == 'function' then
+    pcall(notify, entry)
     return true
   end
   vim.notify(('muxim: %s is blocked%s%s'):format(
@@ -995,6 +998,7 @@ function M.reconcile(buf, parent, live)
   return pruned
 end
 
+---@type integer|false
 M.SWEEP_MS = 5000
 
 local last_sweep = nil

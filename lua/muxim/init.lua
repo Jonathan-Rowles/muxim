@@ -150,6 +150,45 @@ M.enabled = false
 
 M.setup_called = false
 
+---@alias muxim.KeyBinding fun()|{ [1]: fun(), [2]: string? }
+
+---@class muxim.TablineOpts
+---@field sections table?
+---@field highlights table<string, string|table>?
+---@field showtabline integer|false?
+
+---@class muxim.DrawerOpts
+---@field width integer?
+---@field side 'left'|'right'?
+---@field highlights table<string, string|table>?
+---@field format fun(entry: table): string?
+
+---@class muxim.AgentsOpts
+---@field notify boolean|'unfocused'|fun(notice: table)?
+---@field notify_fleet boolean|'unfocused'|fun(notice: table)?
+---@field commands table<string, boolean>|string[]?
+---@field marks table<string, string>?
+---@field drawer muxim.DrawerOpts?
+---@field claude table?
+
+---@class muxim.Opts
+---@field prefix string? default '<C-b>'
+---@field keys false|table<string, muxim.KeyBinding|false>?
+---@field picker 'telescope'|'select'|table?
+---@field projects string[]|fun(): string[]?
+---@field tabline false|muxim.TablineOpts?
+---@field nested boolean? full setup inside another session's terminal
+---@field agents false|muxim.AgentsOpts?
+---@field enter_insert boolean?
+---@field on_terminal_hide fun()?
+---@field on_last_close fun()?
+---@field adopt_foreign_terminals boolean?
+---@field keep_busy_terminals boolean?
+---@field follow_terminal_cwd boolean?
+---@field remain_on_exit boolean?
+
+---@param opts muxim.Opts?
+---@return boolean
 function M.setup(opts)
   M.setup_called = true
   opts = opts or {}
