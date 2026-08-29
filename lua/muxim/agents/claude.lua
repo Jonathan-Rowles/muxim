@@ -1,4 +1,5 @@
 local agents = require('muxim.agents')
+local fsutil = require('muxim.fsutil')
 
 local M = {}
 
@@ -226,27 +227,14 @@ end
 
 function M.plugin_is_current()
   for name, body in pairs(plugin_files()) do
-    local file = io.open(M.plugin_dir() .. '/' .. name, 'r')
-    if not file then return false end
-    local existing = file:read('*a')
-    file:close()
-    if existing ~= body then return false end
+    if not fsutil.matches(M.plugin_dir() .. '/' .. name, body) then return false end
   end
   return true
 end
 
 function M.write_plugin()
   for name, body in pairs(plugin_files()) do
-    local target = M.plugin_dir() .. '/' .. name
-    vim.fn.mkdir(vim.fn.fnamemodify(target, ':h'), 'p', tonumber('700', 8))
-    local tmp = target .. '.tmp.' .. vim.uv.os_getpid()
-    local file = io.open(tmp, 'w')
-    if not file then return false end
-    local ok = file:write(body) and file:close()
-    if not ok or not vim.uv.fs_rename(tmp, target) then
-      os.remove(tmp)
-      return false
-    end
+    if not fsutil.write_atomic(M.plugin_dir() .. '/' .. name, body) then return false end
   end
   return true
 end
@@ -328,16 +316,8 @@ local function without_ours(list)
   return kept
 end
 
-local function read_raw(path)
-  local file = io.open(path, 'r')
-  if not file then return '' end
-  local raw = file:read('*a')
-  file:close()
-  return raw or ''
-end
-
 function M.read_settings(dir)
-  local raw = read_raw(M.settings_path(dir))
+  local raw = fsutil.read(M.settings_path(dir)) or ''
   if vim.trim(raw) == '' then return {} end
   local ok, decoded = pcall(vim.json.decode, raw)
   if not ok or type(decoded) ~= 'table' then return nil end
@@ -347,26 +327,13 @@ end
 
 local function write_settings(settings, dir)
   local target = M.settings_path(dir)
-  local order = key_order(read_raw(target))
+  local order = key_order(fsutil.read(target) or '')
   local stat = vim.uv.fs_stat(target)
   vim.fn.mkdir(vim.fn.fnamemodify(target, ':h'), 'p', tonumber('700', 8))
   target = vim.uv.fs_realpath(target) or target
-  local tmp = target .. '.muxim-tmp.' .. vim.uv.os_getpid()
-  local file = io.open(tmp, 'w')
-  if not file then return false end
   local body = next(settings) == nil and '{}' or encode(settings, 0, order)
-  local ok = file:write(body .. '\n') and file:close()
-  if not ok then
-    os.remove(tmp)
-    return false
-  end
   local mode = stat and bit.band(stat.mode, tonumber('777', 8)) or tonumber('600', 8)
-  vim.uv.fs_chmod(tmp, mode)
-  if not vim.uv.fs_rename(tmp, target) then
-    os.remove(tmp)
-    return false
-  end
-  return true
+  return fsutil.write_atomic(target, body .. '\n', mode)
 end
 
 function M.installed(dir)

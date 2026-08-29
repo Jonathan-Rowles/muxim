@@ -227,27 +227,11 @@ pcall(vim.fn.chanclose, chan)
   return (body:gsub('@CAP@', tostring(M.PAYLOAD_MAX)):gsub('@DEPTH@', tostring(M.PAYLOAD_DEPTH)))
 end
 
-local function atomic_write(target, body)
-  vim.fn.mkdir(vim.fn.fnamemodify(target, ':h'), 'p', tonumber('700', 8))
-  local tmp = target .. '.tmp.' .. vim.uv.os_getpid()
-  local file = io.open(tmp, 'w')
-  if not file then return false end
-  local ok = file:write(body) and file:close()
-  if not ok then
-    os.remove(tmp)
-    return false
-  end
-  vim.uv.fs_chmod(tmp, tonumber('700', 8))
-  if not vim.uv.fs_rename(tmp, target) then
-    os.remove(tmp)
-    return false
-  end
-  return true
-end
+local fsutil = require('muxim.fsutil')
 
 function M.write_hook()
-  return atomic_write(M.hook_lua_path(), M.hook_lua())
-    and atomic_write(M.hook_path(), M.hook_script())
+  return fsutil.write_atomic(M.hook_lua_path(), M.hook_lua(), tonumber('700', 8))
+    and fsutil.write_atomic(M.hook_path(), M.hook_script(), tonumber('700', 8))
 end
 
 function M.shell_init_path()
@@ -277,25 +261,11 @@ function M.shell_init()
 end
 
 function M.write_shell_init()
-  local target = M.shell_init_path()
-  vim.fn.mkdir(vim.fn.fnamemodify(target, ':h'), 'p', tonumber('700', 8))
-  local tmp = target .. '.tmp.' .. vim.uv.os_getpid()
-  local file = io.open(tmp, 'w')
-  if not file then return false end
-  local ok = file:write(M.shell_init()) and file:close()
-  if not ok or not vim.uv.fs_rename(tmp, target) then
-    os.remove(tmp)
-    return false
-  end
-  return true
+  return fsutil.write_atomic(M.shell_init_path(), M.shell_init())
 end
 
 function M.shell_init_is_current()
-  local file = io.open(M.shell_init_path(), 'r')
-  if not file then return false end
-  local body = file:read('*a')
-  file:close()
-  return body == M.shell_init()
+  return fsutil.matches(M.shell_init_path(), M.shell_init())
 end
 
 function M.wrapper_dir()
@@ -370,43 +340,16 @@ function M.wrapper_script()
 end
 
 function M.write_wrapper()
-  local target = M.wrapper_path()
-  vim.fn.mkdir(vim.fn.fnamemodify(target, ':h'), 'p', tonumber('700', 8))
-  local tmp = target .. '.tmp.' .. vim.uv.os_getpid()
-  local file = io.open(tmp, 'w')
-  if not file then return false end
-  local ok = file:write(M.wrapper_script()) and file:close()
-  if not ok then
-    os.remove(tmp)
-    return false
-  end
-  vim.uv.fs_chmod(tmp, tonumber('700', 8))
-  if not vim.uv.fs_rename(tmp, target) then
-    os.remove(tmp)
-    return false
-  end
-  return true
+  return fsutil.write_atomic(M.wrapper_path(), M.wrapper_script(), tonumber('700', 8))
 end
 
 function M.wrapper_is_current()
-  local file = io.open(M.wrapper_path(), 'r')
-  if not file then return false end
-  local body = file:read('*a')
-  file:close()
-  return body == M.wrapper_script()
-end
-
-local function file_matches(path, body)
-  local file = io.open(path, 'r')
-  if not file then return false end
-  local existing = file:read('*a')
-  file:close()
-  return existing == body
+  return fsutil.matches(M.wrapper_path(), M.wrapper_script())
 end
 
 function M.hook_is_current()
-  return file_matches(M.hook_path(), M.hook_script())
-    and file_matches(M.hook_lua_path(), M.hook_lua())
+  return fsutil.matches(M.hook_path(), M.hook_script())
+    and fsutil.matches(M.hook_lua_path(), M.hook_lua())
 end
 
 local function state_dir()
@@ -466,22 +409,13 @@ function M.publish()
       id = entry.id, parent = entry.parent,
     }
   end
-  local target = M.state_file(server.self_path)
-  local tmp = target .. '.tmp'
-  local file = io.open(tmp, 'w')
-  if not file then return false end
-  local ok = file:write(vim.json.encode({
+  return fsutil.write_atomic(M.state_file(server.self_path), vim.json.encode({
     pid = vim.uv.os_getpid(),
     cwd = M.session_cwd(),
     tabs = M.tabs(),
     agents = agents,
     terminals = M.terminals(),
-  })) and file:close()
-  if not ok then
-    os.remove(tmp)
-    return false
-  end
-  return vim.uv.fs_rename(tmp, target) and true or false
+  }))
 end
 
 function M.unpublish()
