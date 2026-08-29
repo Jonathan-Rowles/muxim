@@ -66,21 +66,42 @@ H.eq(c[1][1], '.git/config', 'and it runs the real blocking editor too')
 io.open(work .. '/rel.txt', 'w'):close()
 run({ 'rel.txt' }, { NVIM = '/fake.sock', MUXIM_NVIM = stub })
 c = calls()
-H.eq(#c, 2, 'a file routes as prepare then remote')
-H.eq(c[1][2], '/fake.sock', 'prepare targets the parent socket')
-H.contains(table.concat(c[1], ' '), 'muxim.remote\'.prepare', 'prepare goes over remote-expr')
-H.eq(c[2][3], '--remote', 'the file goes over --remote')
-H.eq(c[2][4], work .. '/rel.txt', 'a relative file is resolved against the terminal cwd')
+H.eq(#c, 3, 'a file routes as probe, prepare, then remote')
+H.eq(c[1][4], '1', 'the probe asks the socket if anyone answers, and only that')
+H.eq(c[2][2], '/fake.sock', 'prepare targets the parent socket')
+H.contains(table.concat(c[2], ' '), 'muxim.remote\'.prepare', 'prepare goes over remote-expr')
+H.eq(c[3][3], '--remote', 'the file goes over --remote')
+H.eq(c[3][4], work .. '/rel.txt', 'a relative file is resolved against the terminal cwd')
 
 run({ 'sub' }, { NVIM = '/fake.sock', MUXIM_NVIM = stub })
 c = calls()
-H.eq(#c, 1, 'a directory routes as one remote-expr')
-H.contains(table.concat(c[1], ' '), 'open_dir(\'' .. work .. '/sub\')', 'a relative dir is resolved against the terminal cwd')
+H.eq(#c, 2, 'a directory routes as probe then one remote-expr')
+H.contains(table.concat(c[2], ' '), 'open_dir(\'' .. work .. '/sub\')', 'a relative dir is resolved against the terminal cwd')
 
 run({}, { NVIM = '/fake.sock', MUXIM_NVIM = stub })
 c = calls()
-H.eq(#c, 1, 'bare nvim makes one call')
-H.contains(table.concat(c[1], ' '), 'muxim.remote\'.focus', 'bare nvim focuses the parent')
+H.eq(#c, 2, 'bare nvim makes the probe then one call')
+H.contains(table.concat(c[2], ' '), 'muxim.remote\'.focus', 'bare nvim focuses the parent')
+
+local dead_stub = work .. '/dead-nvim'
+local dead_file = io.open(dead_stub, 'w')
+dead_file:write(('#!/bin/sh\n{ printf \'%%s\\n\' "$@"; echo ==; } >> %s\nexit 1\n'):format(log))
+dead_file:close()
+vim.uv.fs_chmod(dead_stub, tonumber('700', 8))
+
+run({ 'dead.txt' }, { NVIM = '/dead.sock', MUXIM_NVIM = dead_stub })
+c = calls()
+H.eq(#c, 2, 'a socket nobody answers makes the probe then one passthrough call')
+H.eq(c[1][4], '1', 'the probe is what noticed')
+H.eq(c[2][1], 'dead.txt',
+  'and the original args land on the real editor: $NVIM leaks into tmux started from '
+  .. 'a muxim terminal, and once that session was gone, bare nvim silently did nothing '
+  .. 'while nvim file printed E247 and opened a stray local editor')
+
+run({}, { NVIM = '/dead.sock', MUXIM_NVIM = dead_stub })
+c = calls()
+H.eq(#c, 2, 'bare nvim on a dead socket probes then passes through')
+H.eq(c[2][1] or '', '', 'with no args, instead of the silent nothing it used to be')
 
 local bin_dir = agents.wrapper_dir()
 local result = run({ 'loop.txt' }, { PATH = bin_dir .. ':' .. work .. '/fakebin:/usr/bin:/bin' })
