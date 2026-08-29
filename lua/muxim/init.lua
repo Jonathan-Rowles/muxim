@@ -166,6 +166,7 @@ M.setup_called = false
 ---@class muxim.AgentsOpts
 ---@field notify boolean|'unfocused'|fun(notice: table)?
 ---@field notify_fleet boolean|'unfocused'|fun(notice: table)?
+---@field notify_desktop boolean?
 ---@field commands table<string, boolean>|string[]?
 ---@field marks table<string, string>?
 ---@field drawer muxim.DrawerOpts?

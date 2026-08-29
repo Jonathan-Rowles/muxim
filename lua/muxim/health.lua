@@ -234,6 +234,14 @@ local function check_agents()
   health.ok(('%d agent%s reporting here, %d blocked'):format(
     #tracked, #tracked == 1 and '' or 's', #blocked))
   health.info('notify: ' .. tostring(agents.notify))
+  if not agents.notify_desktop then
+    health.info('desktop notifications are off (notify_desktop = false, the default)')
+  elseif agents.desktop_argv('muxim', 'probe') then
+    health.ok('a desktop notification command is available for when nvim is unfocused')
+  else
+    health.warn('no desktop notification command',
+      'install notify-send (libnotify) so a blocked agent reaches you when nvim is unfocused')
+  end
   if not agents.notify_fleet then
     health.info('agents in other sessions do not notify here (notify_fleet = false)')
   elseif type(agents.watching_fleet) ~= 'function' then

@@ -175,7 +175,10 @@ agents                  Options for |muxim-agents|, or `false` to watch
                         its terminal. `true` always notifies, `false` never
                         does, and a function receives the entry instead. A
                         session with no UI is never notified, whatever this
-                        says, and nothing notifies twice for one wait.
+                        says, and nothing notifies twice for one wait. To
+                        also reach the desktop while nvim is unfocused, opt
+                        in with `notify_desktop` under
+                        |muxim-agents-options|.
 
 nested                  Allow full setup inside another session's terminal.
                         Without it a nested instance sets
@@ -755,11 +758,12 @@ Build your own ~
   require('muxim.drawer').toggle()
 <
 `User MuximAgentState` fires on every change, carrying `buf`, `state`,
-`detail` and `name`, so your own behaviour (a statusline, a desktop
-notification, jump-on-block) needs no patching. It fires only in the session
+`detail` and `name`, so your own behaviour (a statusline, a sound,
+jump-on-block) needs no patching. It fires only in the session
 that RECEIVED the report: to follow the whole fleet, use `agents.watch()`,
 which is what the drawer does.
 
+                                                    *muxim-agents-options*
 Options (under `agents = {...}`):
 
   notify        `'unfocused'` (default), `true`, `false`, or a function
@@ -779,6 +783,24 @@ Options (under `agents = {...}`):
                 (|FocusLost|) or another buffer is current; a terminal that
                 does not report focus leaves muxim assuming it has focus,
                 which is the behaviour it had before.
+  notify_desktop
+                `false` (default). When `true` and nvim itself is unfocused
+                (|FocusLost|), the same notification is also raised with the
+                OS: `osascript` on macOS, `notify-send` (libnotify) on
+                Linux, quietly nothing where neither exists. Only the
+                session the agent lives in raises it: every unfocused
+                session sees a fleet edge, and the desktop is one surface,
+                so fleet notices stay inside nvim. The in-editor message
+                still appears either way, so nothing is lost when you get
+                back. The exception is an agent in a session with no UI
+                attached: that session notifies nowhere (see `notify`
+                above), desktop included, and other sessions cover it
+                in-editor only. A `notify` FUNCTION replaces delivery
+                entirely: call
+                `agents.desktop_notify(title, body)` from it to keep the OS
+                half. |:checkhealth| reports whether a notification command
+                is available; whether one actually lands is between your OS
+                and its notification settings.
   commands      Process names that count as an agent, as a list or as a
                 map to booleans. Default `claude`, `codex`, `pi`,
                 `opencode`, `aider`. A leading dot and a

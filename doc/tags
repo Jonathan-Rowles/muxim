@@ -13,6 +13,7 @@ muxim-agents-api	muxim.txt	/*muxim-agents-api*
 muxim-agents-drawer	muxim.txt	/*muxim-agents-drawer*
 muxim-agents-fleet	muxim.txt	/*muxim-agents-fleet*
 muxim-agents-hooks	muxim.txt	/*muxim-agents-hooks*
+muxim-agents-options	muxim.txt	/*muxim-agents-options*
 muxim-agents-payload	muxim.txt	/*muxim-agents-payload*
 muxim-agents-plugin	muxim.txt	/*muxim-agents-plugin*
 muxim-agents-subagents	muxim.txt	/*muxim-agents-subagents*

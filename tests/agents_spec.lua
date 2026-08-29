@@ -6,6 +6,12 @@ local notified
 local real_notify = vim.notify
 vim.notify = function(msg) notified = msg end
 
+local desktop
+local real_desktop = agents.desktop_notify
+agents.desktop_notify = function(_, body) desktop = body end
+H.eq(agents.notify_desktop, false, 'desktop notifications are opt-in')
+agents.notify_desktop = true
+
 local events = {}
 vim.api.nvim_create_autocmd('User', {
   pattern = 'MuximAgentState',
@@ -45,6 +51,7 @@ notified = nil
 H.eq(agents.report(buf, 'blocked', 'a different prompt'), true, 'and blocks again')
 H.contains(notified, 'blocked', 'which DOES notify: it is a new edge, not the same wait')
 H.contains(notified, 'a different prompt', 'and says what it wants')
+H.eq(desktop, nil, 'a focused nvim sends no desktop notification: you are already looking at it')
 
 notified = nil
 agents.focused = false
@@ -56,8 +63,49 @@ H.contains(notified, 'while you are away',
   'notify = unfocused means the EDITOR is unfocused, not merely that another buffer is '
   .. 'current. Sitting in the agent buffer with nvim in a background window is exactly '
   .. 'when the notification matters, and asking only about the current buffer suppressed it')
+H.contains(desktop, 'while you are away',
+  'and an unfocused nvim ALSO notifies the desktop: vim.notify lands in a window '
+  .. 'you are not looking at, which is the same as silence')
+
+desktop = nil
+H.eq(agents.report(buf, 'working'), true, 'working again while still unfocused')
+agents.notify_desktop = false
+H.eq(agents.report(buf, 'blocked', 'quietly'), true, 'and blocking with notify_desktop = false')
+H.contains(notified, 'quietly', 'still notifies inside nvim')
+H.eq(desktop, nil, 'but stays off the desktop')
+agents.notify_desktop = true
+
+notified, desktop = nil, nil
+agents.deliver({ state = 'blocked', name = 'claude', session = 'elsewhere', here = false })
+H.contains(notified, 'elsewhere', 'a fleet notice still notifies inside nvim while unfocused')
+H.eq(desktop, nil,
+  'but never the desktop: every unfocused session sees the same fleet edge, and '
+  .. 'three sessions raising three OS notifications for one wait breaks the '
+  .. 'one-wait-one-notification promise. The session the agent lives in owns the desktop')
 agents.focused = true
 vim.cmd('tabfirst')
+
+if vim.fn.has('mac') == 1 then
+  local argv = agents.desktop_argv('muxim', 'says "hi" and \\') or {}
+  H.eq(argv[1], 'osascript', 'macos delivers through osascript')
+  H.contains(argv[3], '\\"hi\\"', 'with quotes escaped into the AppleScript string')
+  H.contains(argv[3], '\\\\', 'and backslashes too')
+elseif vim.fn.executable('notify-send') == 1 then
+  local argv = agents.desktop_argv('muxim', '--urgency=critical is blocked <&>') or {}
+  H.eq(argv[1], 'notify-send', 'linux delivers through notify-send')
+  H.eq(argv[3], '--',
+    'with options terminated first: notify-send parses options anywhere in argv, '
+    .. 'so an agent named --urgency=critical would otherwise become one')
+  H.contains(argv[5], '&amp;', 'and markup characters escaped for body-markup servers')
+  H.contains(argv[5], '&lt;', 'all of them')
+end
+H.ok(pcall(agents.desktop_argv, nil, nil),
+  'a nil title or body never throws: the doc tells custom notify functions to call this')
+local flattened = agents.desktop_argv('title\nsplit', 'one\ntwo') or {}
+H.ok(not table.concat(flattened, ' '):find('\n'),
+  'control characters are flattened: a newline splits an AppleScript string literal '
+  .. 'mid-statement and the notification silently dies, and internal callers being '
+  .. 'one_line-d does not protect the public entry point')
 
 notified = nil
 H.eq(agents.report(buf, 'blocked', 'question one\nquestion two'), true,
@@ -495,12 +543,20 @@ local captured
 local phone = require('muxim.terminal').open_in_tab('sleep 300')
 agents.setup({ notify = function(entry) captured = entry end })
 H.eq(#vim.api.nvim_list_uis(), 0, 'this session has no UI')
+desktop = nil
+agents.focused = false
 H.eq(agents.report(phone, 'blocked', 'ring my phone', 'claude'), true, 'a blocked report')
 H.ok(captured ~= nil,
   'a notify FUNCTION still fires with no UI: the rule is about vim.notify, and a '
   .. 'detached session is exactly where a user callback earns its keep')
 H.eq(captured and captured.name, 'claude', 'and it receives the agent name')
+H.eq(desktop, nil,
+  'and it replaces delivery ENTIRELY, desktop half included, even unfocused: the doc '
+  .. 'says so, and the function can call agents.desktop_notify itself to keep it')
+agents.focused = true
 agents.setup({ notify = 'unfocused' })
+agents.notify_desktop = false
+agents.desktop_notify = real_desktop
 
 agents.report('9\nFAKE  forged log line', 'blocked')
 agents.report(buf, 'bogus\nFAKE  forged log line')

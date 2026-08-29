@@ -22,6 +22,8 @@ M.focused = true
 ---@type boolean|'unfocused'|fun(notice: table)
 M.notify_fleet = true
 
+M.notify_desktop = false
+
 function M.may_notify()
   if not M.notify then return false end
   if type(M.notify) == 'function' then return true end
@@ -800,15 +802,44 @@ function M.where(entry)
   return entry.tab and (' in tab ' .. entry.tab) or ''
 end
 
+function M.desktop_argv(title, body)
+  local function flat(text)
+    return (tostring(text or ''):gsub('%c', ' '))
+  end
+  title, body = flat(title), flat(body)
+  if vim.fn.has('mac') == 1 then
+    local function quoted(text)
+      return '"' .. text:gsub('\\', '\\\\'):gsub('"', '\\"') .. '"'
+    end
+    return { 'osascript', '-e',
+      ('display notification %s with title %s'):format(quoted(body), quoted(title)) }
+  end
+  if vim.fn.executable('notify-send') == 1 then
+    local markup_safe_body = body:gsub('&', '&amp;'):gsub('<', '&lt;'):gsub('>', '&gt;')
+    return { 'notify-send', '--app-name=muxim', '--', title, markup_safe_body }
+  end
+  return nil
+end
+
+function M.desktop_notify(title, body)
+  local argv = M.desktop_argv(title, body)
+  if not argv then return false end
+  return (pcall(vim.system, argv))
+end
+
 function M.deliver(entry)
   local notify = M.notify
   if type(notify) == 'function' then
     pcall(notify, entry)
     return true
   end
-  vim.notify(('muxim: %s is blocked%s%s'):format(
+  local blocked = ('%s is blocked%s%s'):format(
     M.who(entry), M.where(entry),
-    entry.detail and (' (' .. entry.detail .. ')') or ''), vim.log.levels.WARN)
+    entry.detail and (' (' .. entry.detail .. ')') or '')
+  vim.notify('muxim: ' .. blocked, vim.log.levels.WARN)
+  if M.notify_desktop and entry.here and not M.focused then
+    M.desktop_notify('muxim', blocked)
+  end
   return true
 end
 
@@ -1273,6 +1304,9 @@ function M.setup(opts)
   end
   if opts.notify_fleet ~= nil then
     M.notify_fleet = opts.notify_fleet
+  end
+  if opts.notify_desktop ~= nil then
+    M.notify_desktop = opts.notify_desktop
   end
   if opts.commands then
     M.COMMANDS = {}
