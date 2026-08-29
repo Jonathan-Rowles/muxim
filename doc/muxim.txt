@@ -763,6 +763,11 @@ jump-on-block) needs no patching. It fires only in the session
 that RECEIVED the report: to follow the whole fleet, use `agents.watch()`,
 which is what the drawer does.
 
+The public surface to build on is what this file documents: the functions
+above, the options, the `User` events, and the vendor, picker, and tabline
+contracts. Anything else the modules happen to export is internal and may
+change without notice.
+
                                                     *muxim-agents-options*
 Options (under `agents = {...}`):
 
