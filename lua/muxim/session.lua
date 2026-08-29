@@ -250,13 +250,6 @@ function M.tab_lines(index, height, width)
   return vim.json.encode({ lines = { '(buffer is not text)' } })
 end
 
-function M.active_tab()
-  for i, tab in ipairs(vim.api.nvim_list_tabpages()) do
-    if tab == vim.api.nvim_get_current_tabpage() then return i end
-  end
-  return 1
-end
-
 function M.tab_lines_async(entry, callback, height, width)
   local server = require('muxim.server')
   local index = entry.index or 1

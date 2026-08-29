@@ -57,10 +57,6 @@ function M.dir()
   return resolved_dir
 end
 
-function M.reset()
-  resolved_dir = nil
-end
-
 function M.name_budget()
   return M.SUN_PATH_MAX - #M.dir() - 1 - #M.PREFIX - #SOCKET_SUFFIX - 1
 end
