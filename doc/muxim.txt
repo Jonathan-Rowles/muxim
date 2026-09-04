@@ -732,8 +732,10 @@ States are `working` (`~`), `blocked` (`!`), `done` (`+`) and `idle`.
 Blocked terminals are also marked in the tabline and the window picker.
 `<prefix>A`, or `<prefix><M-n>` for tmux's next-window-with-alert key, goes
 straight to a blocked agent without opening anything, cycling if more than one
-is waiting. `<M-n>` needs Option-as-Meta enabled in a Mac terminal; `A` works
-everywhere.
+is waiting. Agents here come first; once those are exhausted, or none is
+blocked here, it attaches to the session whose agent is waiting and lands on
+that terminal. `<M-n>` needs Option-as-Meta enabled in a Mac terminal; `A`
+works everywhere.
 
 Rows are highlighted through linked groups you can override, shared by the
 drawer, the picker rows and the previews: `MuximAgentBlocked`,
@@ -750,7 +752,8 @@ Build your own ~
   local agents = require('muxim.agents')
   agents.blocked()          -- entries: buf, tab, name, state, detail
   agents.tracked()          -- all of them, blocked first
-  agents.focus_blocked()    -- go to one, cycling
+  agents.focus_blocked()    -- go to one, cycling, in any session
+  agents.focus(buf)         -- go to that terminal, here
   agents.published(path)    -- what another session has published
   agents.fleet_view(cb)     -- every live session, with its agents
   agents.watch(cb)          -- called when any session publishes a change

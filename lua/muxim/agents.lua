@@ -1118,36 +1118,78 @@ end
 local function fleet_blocked()
   local server = require('muxim.server')
   local runtime = require('muxim.runtime')
+  local remote = {}
   for _, entry in ipairs(server.list()) do
     if entry.path ~= server.self_path then
       local state, readable = M.published(entry.path)
       if readable then
         for _, agent in ipairs(state.agents or {}) do
-          if agent.state == 'blocked' then
-            return runtime.display_name(entry.path), agent.name
+          if agent.state == 'blocked' and type(agent.buf) == 'number' then
+            remote[#remote + 1] = {
+              path = entry.path,
+              session = runtime.display_name(entry.path),
+              buf = agent.buf,
+              name = agent.name,
+            }
           end
         end
       end
     end
   end
+  return remote
+end
+
+function M.focus(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return false end
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_set_current_tabpage(vim.api.nvim_win_get_tabpage(win))
+      vim.api.nvim_set_current_win(win)
+      return true
+    end
+  end
+  local tab = require('muxim.terminal').owner(buf)
+  if tab and vim.api.nvim_tabpage_is_valid(tab) then
+    vim.api.nvim_set_current_tabpage(tab)
+  end
+  if vim.bo.buftype ~= '' or vim.bo.modified then
+    vim.cmd('split')
+  end
+  vim.api.nvim_set_current_buf(buf)
+  return true
+end
+
+local function focus_in(target)
+  local server = require('muxim.server')
+  local focus = ("v:lua.require'muxim.agents'.focus(%d)"):format(target.buf)
+  local focused = server.remote_expr(target.path, focus)
+  if focused == 'false' then
+    vim.notify(('muxim: %s is blocked in %s but its terminal is gone there'):format(
+      target.name or 'an agent', target.session), vim.log.levels.WARN)
+    return false
+  end
+  if not server.connect(target.path) then return false end
+  if focused == nil and server.remote_expr(target.path, focus) == nil then
+    vim.notify(('muxim: attached to %s but it did not answer the request to show %s'):format(
+      target.session, target.name or 'the blocked agent'), vim.log.levels.WARN)
+    return false
+  end
+  return true
 end
 
 function M.focus_blocked()
   local blocked = M.blocked()
+  for _, remote in ipairs(fleet_blocked()) do
+    blocked[#blocked + 1] = remote
+  end
   if #blocked == 0 then
-    local session, name = fleet_blocked()
-    if session then
-      vim.notify(('muxim: %s is blocked in %s, not here; %sw switches sessions'):format(
-        name or 'an agent', session, require('muxim.keys').prefix or '<prefix>'))
-    else
-      vim.notify('muxim: no agent is blocked')
-    end
+    vim.notify('muxim: no agent is blocked')
     return false
   end
   local current = vim.api.nvim_get_current_buf()
   local from = 0
   for index, entry in ipairs(blocked) do
-    if entry.buf == current then
+    if not entry.path and entry.buf == current then
       from = index
       break
     end
@@ -1155,7 +1197,7 @@ function M.focus_blocked()
   local target
   for offset = 1, #blocked do
     local entry = blocked[(from + offset - 1) % #blocked + 1]
-    if entry.buf ~= current then
+    if entry.path or entry.buf ~= current then
       target = entry
       break
     end
@@ -1164,20 +1206,14 @@ function M.focus_blocked()
     vim.notify('muxim: already at the blocked agent')
     return true
   end
-  for _, win in ipairs(vim.fn.win_findbuf(target.buf)) do
-    if vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_set_current_tabpage(vim.api.nvim_win_get_tabpage(win))
-      vim.api.nvim_set_current_win(win)
-      return true
-    end
+  if target.path then
+    return focus_in(target)
   end
-  if target.tab and vim.api.nvim_tabpage_is_valid(target.tab) then
-    vim.api.nvim_set_current_tabpage(target.tab)
+  if not M.focus(target.buf) then
+    vim.notify(('muxim: the terminal %s was blocked in is gone'):format(target.name or 'an agent'),
+      vim.log.levels.WARN)
+    return false
   end
-  if vim.bo.buftype ~= '' or vim.bo.modified then
-    vim.cmd('split')
-  end
-  vim.api.nvim_set_current_buf(target.buf)
   return true
 end
 

@@ -18,15 +18,39 @@ end, 100), 'and recorded a blocked agent, published where any session can read i
 
 H.eq(#agents.tracked(), 0, 'this session has no agents of its own')
 
-local notified
-local real_notify = vim.notify
-vim.notify = function(msg) notified = msg end
-H.eq(agents.focus_blocked(), false, 'focus_blocked has nowhere local to go')
-H.contains(notified or '', 'blocked in fleet-agent',
-  'but it names the session whose agent is blocked, because the bare '
-  .. '"no agent is blocked" is a lie when the fleet has one waiting')
-H.contains(notified or '', 'w switches sessions', 'and points at the session picker')
-vim.notify = real_notify
+local connected
+local real_connect = server.connect
+server.connect = function(target) connected = target return true end
+server.remote_expr(path, "execute('tabfirst')", 5000)
+H.ok(server.remote_expr(path, 'bufnr()') ~= remote_buf,
+  'that session is looking somewhere other than its blocked terminal')
+H.eq(agents.focus_blocked(), true,
+  'focus_blocked with nothing blocked HERE goes to the one blocked out there')
+H.eq(connected, path, 'by attaching to that session')
+H.eq(server.remote_expr(path, 'bufnr()'), remote_buf,
+  'after telling it to show the blocked terminal, so you land on the agent, '
+  .. 'not on whatever that session was showing when it was left')
+
+local clash = tonumber(remote_buf)
+while not vim.api.nvim_buf_is_valid(clash) do vim.api.nvim_create_buf(true, true) end
+vim.api.nvim_set_current_buf(clash)
+connected = nil
+H.eq(agents.focus_blocked(), true, 'sitting in a local buffer with the SAME number as the remote blocked one')
+H.eq(connected, path, 'still goes remote: buffer numbers only mean something inside their own session')
+
+local local_term = require('muxim.terminal').open_in_tab('sleep 300')
+H.eq(agents.report(local_term, 'blocked', 'local prompt', 'codex'), true, 'an agent blocks HERE too')
+vim.cmd('tabfirst')
+connected = nil
+H.eq(agents.focus_blocked(), true, 'from elsewhere, focus_blocked')
+H.eq(vim.api.nvim_get_current_buf(), local_term, 'goes to the local one first')
+H.eq(connected, nil, 'without leaving this session')
+H.eq(agents.focus_blocked(), true, 'pressed again while sitting on the only local blocked agent')
+H.eq(connected, path, 'moves on to the session with the next one, instead of saying already-at')
+H.eq(agents.report(local_term, 'ended', '', 'codex'), true, 'the local agent ends')
+vim.cmd('bwipeout! ' .. local_term)
+vim.cmd('tabfirst')
+server.connect = real_connect
 
 
 local fleet
@@ -46,8 +70,7 @@ H.ok(vim.wait(5000, function() return drawn():find('permission prompt', 1, true)
   'and the drawer shows it, read from that session\'s state file')
 H.contains(drawn(), runtime.display_name(path), 'labelled with the session it lives in')
 
-local connected
-local real_connect = server.connect
+connected = nil
 server.connect = function(target) connected = target return true end
 local asked = false
 local real_confirm = vim.fn.confirm
@@ -245,6 +268,24 @@ H.contains(table.concat(agents.log_lines(), '\n'), 'fleet blocked',
 
 agents.notify = real_notify_opt
 agents.unwatch_fleet()
+
+server.remote_expr(path, ("execute('bwipeout! %s')"):format(remote_buf), 5000)
+republish()
+local told
+local real_notify = vim.notify
+vim.notify = function(msg) told = msg end
+connected = nil
+server.connect = function(target) connected = target return true end
+H.eq(agents.focus_blocked(), false,
+  'a published agent whose terminal is already gone in its session is not a target')
+H.eq(connected, nil, 'so it does not attach you to that session to look at nothing')
+H.contains(told or '', 'terminal is gone', 'and says why')
+os.remove(state_file)
+told = nil
+H.eq(agents.focus_blocked(), false, 'with nothing blocked anywhere')
+H.contains(told or '', 'no agent is blocked', 'it says so')
+vim.notify = real_notify
+server.connect = real_connect
 
 H.ok(H.kill(path), 'the second session is gone')
 

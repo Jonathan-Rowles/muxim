@@ -47,7 +47,7 @@ Run `nvim` in a project directory; that project is now a session. `<prefix>d` de
 | `<prefix>d` | detach | `:detach` |
 | `<prefix>R` | set tab root from the focused terminal | `:tcd` |
 | `<prefix>a` | agent drawer | muxim |
-| `<prefix>A` | go to a blocked agent | muxim |
+| `<prefix>A` | go to a blocked agent, in any session | muxim |
 | `<prefix>C` | new window running an agent | muxim |
 | `<prefix>?` | cheatsheet | muxim |
 | `<prefix><prefix>` | send the prefix through | |
